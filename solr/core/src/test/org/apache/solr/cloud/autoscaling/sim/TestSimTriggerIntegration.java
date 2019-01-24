@@ -42,6 +42,7 @@ import org.apache.solr.client.solrj.cloud.autoscaling.ReplicaInfo;
 import org.apache.solr.client.solrj.cloud.autoscaling.TriggerEventProcessorStage;
 import org.apache.solr.client.solrj.request.CollectionAdminRequest;
 import org.apache.solr.cloud.CloudTestUtils;
+import org.apache.solr.cloud.CloudUtils;
 import org.apache.solr.cloud.autoscaling.ActionContext;
 import org.apache.solr.cloud.autoscaling.AutoScaling;
 import org.apache.solr.cloud.autoscaling.CapturedEvent;
@@ -554,7 +555,7 @@ public class TestSimTriggerIntegration extends SimSolrCloudTestCase {
       fail("The TriggerAction should have been created by now");
     }
 
-    String lostNodeName = cluster.getSimClusterStateProvider().simGetRandomNode();
+    String lostNodeName = cluster.getSimClusterStateProvider().simGetRandomNode(random());
     cluster.simRemoveNode(lostNodeName, false);
     boolean await = triggerFiredLatch.await(45000 / SPEED, TimeUnit.MILLISECONDS);
     assertTrue("The trigger did not fire at all", await);
@@ -713,7 +714,7 @@ public class TestSimTriggerIntegration extends SimSolrCloudTestCase {
   public void testEventQueue() throws Exception {
     waitForSeconds = 1;
     SolrClient solrClient = cluster.simGetSolrClient();
-    String overseerLeader = cluster.getSimClusterStateProvider().simGetRandomNode();
+    String overseerLeader = cluster.getSimClusterStateProvider().simGetRandomNode(random());
 
     assertAutoScalingRequest
       ("{" +
@@ -1326,7 +1327,7 @@ public class TestSimTriggerIntegration extends SimSolrCloudTestCase {
     CollectionAdminRequest.Create create = CollectionAdminRequest.createCollection(COLL1,
         "conf", 1, 2);
     create.process(solrClient);
-    CloudTestUtils.waitForState(cluster, COLL1, 10, TimeUnit.SECONDS, CloudTestUtils.clusterShape(1, 2, false, true));
+    CloudUtils.waitForState(cluster, COLL1, 10, TimeUnit.SECONDS, CloudUtils.clusterShape(1, 2, false, true));
 
     listenerEventLatch = new CountDownLatch(4);
     

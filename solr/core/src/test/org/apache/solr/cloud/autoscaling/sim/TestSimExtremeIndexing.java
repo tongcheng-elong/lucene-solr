@@ -26,8 +26,8 @@ import org.apache.solr.client.solrj.SolrRequest;
 import org.apache.solr.client.solrj.request.CollectionAdminRequest;
 import org.apache.solr.client.solrj.request.UpdateRequest;
 import org.apache.solr.client.solrj.response.QueryResponse;
-import org.apache.solr.cloud.CloudTestUtils;
 import org.apache.solr.cloud.CloudTestUtils.AutoScalingRequest;
+import org.apache.solr.cloud.CloudUtils;
 import org.apache.solr.cloud.autoscaling.ExecutePlanAction;
 import org.apache.solr.common.SolrDocumentList;
 import org.apache.solr.common.SolrInputDocument;
@@ -99,9 +99,9 @@ public class TestSimExtremeIndexing extends SimSolrCloudTestCase {
     CollectionAdminRequest.Create create = CollectionAdminRequest.createCollection(collectionName,
         "conf", 2, 2).setMaxShardsPerNode(10);
     create.process(solrClient);
-    
-    CloudTestUtils.waitForState(cluster, collectionName, 90, TimeUnit.SECONDS,
-        CloudTestUtils.clusterShape(2, 2, false, true));
+
+    CloudUtils.waitForState(cluster, collectionName, 90, TimeUnit.SECONDS,
+        CloudUtils.clusterShape(2, 2, false, true));
 
     //long waitForSeconds = 3 + random().nextInt(5);
     long waitForSeconds = 1;

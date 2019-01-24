@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.solr.util;
+package org.apache.solr.cloud.autoscaling.sim;
 
 import java.io.IOException;
 import java.util.LinkedHashMap;
@@ -32,7 +32,6 @@ import org.apache.solr.common.SolrDocumentList;
 import org.apache.solr.common.SolrInputDocument;
 import org.apache.solr.common.params.SolrParams;
 import org.apache.solr.common.util.NamedList;
-import org.junit.Assert;
 
 /**
  * Simple mock client that collects added documents and supports simple search by id
@@ -62,7 +61,7 @@ public class MockSearchableSolrClient extends SolrClient {
       if (docList != null) {
         docList.forEach(doc -> {
           String id = (String) doc.getFieldValue("id");
-          Assert.assertNotNull(doc.toString(), id);
+          assert id != null : doc.toString();
           docs.computeIfAbsent(collection, c -> new LinkedHashMap<>()).put(id, doc);
         });
       }

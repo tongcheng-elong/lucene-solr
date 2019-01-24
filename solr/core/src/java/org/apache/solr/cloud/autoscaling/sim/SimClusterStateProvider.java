@@ -61,7 +61,7 @@ import org.apache.solr.client.solrj.request.UpdateRequest;
 import org.apache.solr.client.solrj.response.QueryResponse;
 import org.apache.solr.client.solrj.response.UpdateResponse;
 import org.apache.solr.cloud.ActionThrottle;
-import org.apache.solr.cloud.CloudTestUtils;
+import org.apache.solr.cloud.CloudUtils;
 import org.apache.solr.cloud.Overseer;
 import org.apache.solr.cloud.api.collections.AddReplicaCmd;
 import org.apache.solr.cloud.api.collections.Assign;
@@ -94,7 +94,6 @@ import org.apache.solr.common.util.Utils;
 import org.apache.solr.core.SolrInfoBean;
 import org.apache.solr.metrics.SolrMetricManager;
 import org.apache.zookeeper.CreateMode;
-import org.junit.Assert;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -238,14 +237,6 @@ public class SimClusterStateProvider implements ClusterStateProvider {
   private ActionThrottle getThrottle(String collection, String shard) {
     return leaderThrottles.computeIfAbsent(collection, coll -> new ConcurrentHashMap<>())
         .computeIfAbsent(shard, s -> new ActionThrottle("leader", 5000, cloudManager.getTimeSource()));
-  }
-
-  /**
-   * Get random node id.
-   * @return one of the live nodes
-   */
-  public String simGetRandomNode() {
-    return simGetRandomNode(cloudManager.getRandom());
   }
 
   /**
@@ -636,7 +627,7 @@ public class SimClusterStateProvider implements ClusterStateProvider {
     try {
       VersionedData oldData = stateManager.getData(ZkStateReader.CLUSTER_STATE);
       int version = oldData != null ? oldData.getVersion() : 0;
-      Assert.assertEquals(clusterStateVersion, version);
+      assert clusterStateVersion == version;
       stateManager.setData(ZkStateReader.CLUSTER_STATE, data, version);
       log.debug("** saved cluster state version " + (version));
       clusterStateVersion++;
@@ -893,7 +884,7 @@ public class SimClusterStateProvider implements ClusterStateProvider {
     int numNrtReplicas = props.getInt(NRT_REPLICAS, props.getInt(REPLICATION_FACTOR, numTlogReplicas>0?0:1));
     int numPullReplicas = props.getInt(PULL_REPLICAS, 0);
     int totalReplicas = shardNames.size() * (numNrtReplicas + numPullReplicas + numTlogReplicas);
-    Assert.assertEquals("unexpected number of replica positions", totalReplicas, replicaPositions.size());
+    assert totalReplicas == replicaPositions.size() : "unexpected number of replica positions" ;
     final CountDownLatch finalStateLatch = new CountDownLatch(replicaPositions.size());
     AtomicInteger replicaNum = new AtomicInteger(1);
     replicaPositions.forEach(pos -> {
@@ -1046,7 +1037,7 @@ public class SimClusterStateProvider implements ClusterStateProvider {
   }
 
   /**
-   * Move replica. This uses a similar algorithm as {@link org.apache.solr.cloud.api.collections.MoveReplicaCmd#moveNormalReplica(ClusterState, NamedList, String, String, DocCollection, Replica, Slice, int, boolean)}.
+   * Move replica. This uses a similar algorithm as <code>MoveReplicaCmd.moveNormalReplica(...)</code>
    * @param message operation details
    * @param results operation results.
    */
@@ -1276,7 +1267,7 @@ public class SimClusterStateProvider implements ClusterStateProvider {
 
     boolean success = false;
     try {
-      CloudTestUtils.waitForState(cloudManager, collectionName, 30, TimeUnit.SECONDS, (liveNodes, state) -> {
+      CloudUtils.waitForState(cloudManager, collectionName, 30, TimeUnit.SECONDS, (liveNodes, state) -> {
         for (String subSlice : subSlices) {
           Slice s = state.getSlice(subSlice);
           if (s.getLeader() == null) {
@@ -1405,8 +1396,8 @@ public class SimClusterStateProvider implements ClusterStateProvider {
           OverseerCollectionMessageHandler.NUM_SLICES, "1",
           CommonAdminParams.WAIT_FOR_FINAL_STATE, "true");
       simCreateCollection(props, new NamedList());
-      CloudTestUtils.waitForState(cloudManager, CollectionAdminParams.SYSTEM_COLL, 120, TimeUnit.SECONDS,
-          CloudTestUtils.clusterShape(1, Integer.parseInt(repFactor), false, true));
+      CloudUtils.waitForState(cloudManager, CollectionAdminParams.SYSTEM_COLL, 120, TimeUnit.SECONDS,
+          CloudUtils.clusterShape(1, Integer.parseInt(repFactor), false, true));
     } catch (Exception e) {
       throw new IOException(e);
     }

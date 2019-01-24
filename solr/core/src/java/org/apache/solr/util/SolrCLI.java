@@ -19,12 +19,14 @@ package org.apache.solr.util;
 import javax.net.ssl.SSLPeerUnverifiedException;
 import java.io.Console;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.lang.invoke.MethodHandles;
 import java.net.ConnectException;
+import java.net.MalformedURLException;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.URL;
@@ -43,6 +45,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -72,6 +75,7 @@ import org.apache.commons.exec.Executor;
 import org.apache.commons.exec.OS;
 import org.apache.commons.exec.environment.EnvironmentUtils;
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.BooleanUtils;
 import org.apache.commons.lang.SystemUtils;
 import org.apache.http.HttpEntity;
@@ -92,16 +96,28 @@ import org.apache.lucene.util.Version;
 import org.apache.solr.client.solrj.SolrClient;
 import org.apache.solr.client.solrj.SolrQuery;
 import org.apache.solr.client.solrj.SolrRequest;
+import org.apache.solr.client.solrj.SolrResponse;
 import org.apache.solr.client.solrj.SolrServerException;
+import org.apache.solr.client.solrj.cloud.DistributedQueue;
+import org.apache.solr.client.solrj.cloud.DistributedQueueFactory;
+import org.apache.solr.client.solrj.cloud.SolrCloudManager;
+import org.apache.solr.client.solrj.cloud.autoscaling.AutoScalingConfig;
+import org.apache.solr.client.solrj.cloud.autoscaling.PolicyHelper;
+import org.apache.solr.client.solrj.cloud.autoscaling.Suggester;
 import org.apache.solr.client.solrj.impl.CloudSolrClient;
 import org.apache.solr.client.solrj.impl.HttpClientUtil;
 import org.apache.solr.client.solrj.impl.HttpSolrClient;
 import org.apache.solr.client.solrj.impl.HttpSolrClient.Builder;
+import org.apache.solr.client.solrj.impl.SolrClientCloudManager;
 import org.apache.solr.client.solrj.impl.ZkClientClusterStateProvider;
 import org.apache.solr.client.solrj.request.CollectionAdminRequest;
 import org.apache.solr.client.solrj.request.ContentStreamUpdateRequest;
+import org.apache.solr.client.solrj.request.GenericSolrRequest;
+import org.apache.solr.client.solrj.request.RequestWriter;
 import org.apache.solr.client.solrj.response.CollectionAdminResponse;
 import org.apache.solr.client.solrj.response.QueryResponse;
+import org.apache.solr.cloud.autoscaling.sim.SimCloudManager;
+import org.apache.solr.common.MapWriter;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.cloud.ClusterState;
 import org.apache.solr.common.cloud.DocCollection;
@@ -114,10 +130,15 @@ import org.apache.solr.common.cloud.ZkStateReader;
 import org.apache.solr.common.params.CollectionAdminParams;
 import org.apache.solr.common.params.CommonParams;
 import org.apache.solr.common.params.ModifiableSolrParams;
+import org.apache.solr.common.params.SolrParams;
 import org.apache.solr.common.util.ContentStreamBase;
 import org.apache.solr.common.util.NamedList;
 import org.apache.solr.common.util.StrUtils;
+import org.apache.solr.common.util.TimeSource;
+import org.apache.solr.common.util.Utils;
+import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.security.Sha256AuthenticationProvider;
+import org.apache.solr.servlet.SolrRequestParsers;
 import org.apache.solr.util.configuration.SSLConfigurationsFactory;
 import org.noggit.CharArr;
 import org.noggit.JSONParser;
@@ -392,6 +413,8 @@ public class SolrCLI {
       return new UtilsTool();
     else if ("auth".equals(toolType))
       return new AuthTool();
+    else if ("autoscaling".equals(toolType))
+      return new AutoscalingTool();
 
     // If you add a built-in tool to this class, add it here to avoid
     // classpath scanning
@@ -410,6 +433,7 @@ public class SolrCLI {
     formatter.printHelp("healthcheck", getToolOptions(new HealthcheckTool()));
     formatter.printHelp("status", getToolOptions(new StatusTool()));
     formatter.printHelp("api", getToolOptions(new ApiTool()));
+    formatter.printHelp("autoscaling", getToolOptions(new AutoscalingTool()));
     formatter.printHelp("create_collection", getToolOptions(new CreateCollectionTool()));
     formatter.printHelp("create_core", getToolOptions(new CreateCoreTool()));
     formatter.printHelp("create", getToolOptions(new CreateTool()));
@@ -831,6 +855,232 @@ public class SolrCLI {
     return result;
   }
   
+
+  public static class AutoscalingTool extends ToolBase {
+    static final String NODE_REDACTION_PREFIX = "N_";
+    static final String COLL_REDACTION_PREFIX = "COLL_";
+
+    public AutoscalingTool() {
+      this(System.out);
+    }
+
+    public AutoscalingTool(PrintStream stdout) {
+      super(stdout);
+    }
+
+    @Override
+    public Option[] getOptions() {
+      return new Option[] {
+          OptionBuilder
+              .withArgName("HOST")
+              .hasArg()
+              .isRequired(false)
+              .withDescription("Address of the Zookeeper ensemble")
+              .create("zkHost"),
+          OptionBuilder
+              .withArgName("CONFIG")
+              .hasArg()
+              .isRequired(false)
+              .withDescription("Autoscaling config file, defaults to the one deployed in the cluster.")
+              .withLongOpt("config")
+              .create("a"),
+          OptionBuilder
+              .withDescription("Show calculated suggestions")
+              .withLongOpt("suggestions")
+              .create("s"),
+          OptionBuilder
+              .withArgName("NUM")
+              .withDescription("Use a simulated cluster with NUM nodes")
+              .hasArg()
+              .isRequired(false)
+              .create("simulate"),
+          OptionBuilder
+              .withArgName("FILE")
+              .withDescription("A FILE with a list of requests to execute (only '/path?params' part), one per line.")
+              .hasArg()
+              .isRequired(false)
+              .create("script"),
+          OptionBuilder
+              .withDescription("Show calculated diagnostics")
+              .withLongOpt("diagnostics")
+              .create("d"),
+          OptionBuilder
+              .withDescription("Show sorted nodes with diagnostics")
+              .withLongOpt("sortedNodes")
+              .create("n"),
+          OptionBuilder
+              .withDescription("Redact node and collection names (original names will be consistently randomized)")
+              .withLongOpt("redact")
+              .create("r")
+      };
+    }
+
+    @Override
+    public String getName() {
+      return "autoscaling";
+    }
+
+    @Override
+    protected void runImpl(CommandLine cli) throws Exception {
+      raiseLogLevelUnlessVerbose(cli);
+      DistributedQueueFactory dummmyFactory = new DistributedQueueFactory() {
+        @Override
+        public DistributedQueue makeQueue(String path) throws IOException {
+          throw new UnsupportedOperationException("makeQueue");
+        }
+
+        @Override
+        public void removeQueue(String path) throws IOException {
+          throw new UnsupportedOperationException("removeQueue");
+        }
+      };
+      SolrCloudManager cloudManager;
+      SolrClient solrClient;
+      if (cli.getOptionValue("simulate") == null) {
+        String zkHost = cli.getOptionValue("zkHost", ZK_HOST);
+
+        log.debug("Connecting to Solr cluster: " + zkHost);
+        CloudSolrClient cloudSolrClient = new CloudSolrClient.Builder(Collections.singletonList(zkHost), Optional.empty()).build();
+        String collection = cli.getOptionValue("collection");
+        if (collection != null)
+          cloudSolrClient.setDefaultCollection(collection);
+
+        cloudSolrClient.connect();
+        cloudManager = new SolrClientCloudManager(dummmyFactory, cloudSolrClient);
+        solrClient = cloudSolrClient;
+      } else {
+        String numNodes = cli.getOptionValue("simulate");
+        int n = Integer.parseInt(numNodes);
+        cloudManager = SimCloudManager.createCluster(n, TimeSource.get("simTime:10"));
+        solrClient = ((SimCloudManager)cloudManager).simGetSolrClient();
+      }
+      // if there's a script execute it now
+      String script = cli.getOptionValue("script");
+      if (script != null) {
+        stdout.println("- reading script from " + script);
+        List<String> lines = IOUtils.readLines(new FileInputStream(script), "UTF-8");
+        stdout.println("- executing " + lines.size() + " commands...");
+        for (int i = 0; i < lines.size(); i++) {
+          String line = lines.get(i);
+          if (line.charAt(0) == '#' || line.trim().isEmpty()) { // comment or blank
+            continue;
+          }
+          String[] parts = line.trim().split("!");
+          SolrRequest req;
+          SolrParams params;
+          String path;
+          if (parts.length > 0) {
+            String[] pathQuery = parts[0].split("\\?");
+            if (pathQuery.length == 0 || pathQuery.length > 2) {
+              throw new IllegalArgumentException("Invalid request string: " + parts[0]);
+            }
+            path = pathQuery[0];
+            if (pathQuery.length > 1) {
+              params = SolrRequestParsers.parseQueryString(pathQuery[1]);
+            } else {
+              params = new ModifiableSolrParams();
+            }
+          } else {
+            throw new IllegalArgumentException("Empty script command");
+          }
+          if (parts.length == 1) {
+            // GET request
+            req = new GenericSolrRequest(SolrRequest.METHOD.GET, path, params);
+          } else if (parts.length == 2) {
+            // POST request with JSON payload
+            req = new GenericSolrRequest(SolrRequest.METHOD.POST, path, params);
+            ((GenericSolrRequest) req).setContentWriter(
+                new RequestWriter.StringPayloadContentWriter(parts[1], "application/json"));
+          } else {
+            throw new IllegalArgumentException("Script commands should have 1 part (GET) or 2 parts (POST):\n'" + line + "'");
+          }
+          SolrResponse rsp = cloudManager.request(req);
+          stdout.println((i + 1) + ".\tREQ: " + req.getPath() + "?" + req.getParams());
+          stdout.println("   \tRSP: " + Utils.toJSONString(rsp.getResponse()));
+        }
+      }
+      try {
+        AutoScalingConfig config = null;
+        HashSet<String> liveNodes = new HashSet<>();
+        String configFile = cli.getOptionValue("a");
+        if (configFile != null) {
+          stdout.println("- reading autoscaling config from " + configFile);
+          config = new AutoScalingConfig(IOUtils.toByteArray(new FileInputStream(configFile)));
+        } else {
+          stdout.println("- reading autoscaling config from the cluster.");
+          config = cloudManager.getDistribStateManager().getAutoScalingConfig();
+        }
+        stdout.println("- calculating suggestions...");
+        long start = TimeSource.NANO_TIME.getTimeNs();
+        // collect live node names for optional redaction
+        liveNodes.addAll(cloudManager.getClusterStateProvider().getLiveNodes());
+        List<Suggester.SuggestionInfo> suggestions = PolicyHelper.getSuggestions(config, cloudManager);
+        long end = TimeSource.NANO_TIME.getTimeNs();
+        stdout.println("  (took " + TimeUnit.NANOSECONDS.toMillis(end - start) + " ms)");
+        stdout.println("- calculating diagnostics...");
+        start = TimeSource.NANO_TIME.getTimeNs();
+        // update the live nodes
+        liveNodes.addAll(cloudManager.getClusterStateProvider().getLiveNodes());
+        MapWriter mw = PolicyHelper.getDiagnostics(config.getPolicy(), cloudManager);
+        Map<String, Object> diagnostics = new LinkedHashMap<>();
+        mw.toMap(diagnostics);
+        end = TimeSource.NANO_TIME.getTimeNs();
+        stdout.println("  (took " + TimeUnit.NANOSECONDS.toMillis(end - start) + " ms)");
+        boolean withSuggestions = cli.hasOption("s");
+        boolean withDiagnostics = cli.hasOption("d") || cli.hasOption("n");
+        boolean withSortedNodes = cli.hasOption("n");
+        // prepare to redact also host names / IPs in base_url and other properties
+        Set<String> redactNames = new HashSet<>();
+        for (String nodeName : liveNodes) {
+          String urlString = Utils.getBaseUrlForNodeName(nodeName, "http");
+          try {
+            URL u = new URL(urlString);
+            // protocol format
+            redactNames.add(u.getHost() + ":" + u.getPort());
+            // node name format
+            redactNames.add(u.getHost() + "_" + u.getPort() + "_");
+          } catch (MalformedURLException e) {
+            log.warn("Invalid URL for node name " + nodeName + ", replacing including protocol and path", e);
+            redactNames.add(urlString);
+            redactNames.add(Utils.getBaseUrlForNodeName(nodeName, "https"));
+          }
+        }
+        // redact collection names too
+        Set<String> redactCollections = new HashSet<>();
+        ClusterState clusterState = cloudManager.getClusterStateProvider().getClusterState();
+        clusterState.forEachCollection(coll -> redactCollections.add(coll.getName()));
+        if (!withSuggestions && !withDiagnostics) {
+          withSuggestions = true;
+        }
+        if (withSuggestions) {
+          stdout.println("\n============= SUGGESTIONS ===========");
+          String suggestionsString = Utils.toJSONString(suggestions);
+          if (cli.hasOption("r")) {
+            // replace collections first with a different prefix
+            suggestionsString = RedactionUtils.redactNames(redactCollections, COLL_REDACTION_PREFIX, suggestionsString);
+            // then replace node names
+            suggestionsString = RedactionUtils.redactNames(redactNames, NODE_REDACTION_PREFIX, suggestionsString);
+          }
+          stdout.println(suggestionsString);
+        }
+        if (!withSortedNodes) {
+          diagnostics.remove("sortedNodes");
+        }
+        if (withDiagnostics) {
+          stdout.println("\n============= DIAGNOSTICS ===========");
+          String diagnosticsString = Utils.toJSONString(diagnostics);
+          if (cli.hasOption("r")) {
+            diagnosticsString = RedactionUtils.redactNames(redactCollections, COLL_REDACTION_PREFIX, diagnosticsString);
+            diagnosticsString = RedactionUtils.redactNames(redactNames, NODE_REDACTION_PREFIX, diagnosticsString);
+          }
+          stdout.println(diagnosticsString);
+        }
+      } finally {
+        solrClient.close();
+        cloudManager.close();
+      }
+    }
+  }
 
   /**
    * Get the status of a Solr server.

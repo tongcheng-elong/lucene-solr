@@ -38,7 +38,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-import com.carrotsearch.randomizedtesting.RandomizedContext;
 import com.codahale.metrics.jvm.ClassLoadingGaugeSet;
 import com.codahale.metrics.jvm.GarbageCollectorMetricSet;
 import com.codahale.metrics.jvm.MemoryUsageGaugeSet;
@@ -98,7 +97,6 @@ import org.apache.solr.metrics.SolrMetricManager;
 import org.apache.solr.request.LocalSolrQueryRequest;
 import org.apache.solr.response.SolrQueryResponse;
 import org.apache.solr.util.DefaultSolrThreadFactory;
-import org.apache.solr.util.MockSearchableSolrClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -406,13 +404,6 @@ public class SimCloudManager implements SolrCloudManager {
   }
 
   /**
-   * Get the source of randomness (usually initialized by the test suite).
-   */
-  public Random getRandom() {
-    return RandomizedContext.current().getRandom();
-  }
-
-  /**
    * Add a new node and initialize its node values (metrics). The
    * /live_nodes list is updated with the new node id.
    * @return new node id
@@ -693,6 +684,7 @@ public class SimCloudManager implements SolrCloudManager {
         ModifiableSolrParams params = new ModifiableSolrParams(req.getParams());
         params.set(CommonParams.PATH, req.getPath());
         LocalSolrQueryRequest queryRequest = new LocalSolrQueryRequest(null, params);
+        queryRequest.getContext().put("path", req.getPath());
         if (autoscaling) {
           RequestWriter.ContentWriter cw = req.getContentWriter("application/json");
           if (null != cw) {
@@ -762,7 +754,7 @@ public class SimCloudManager implements SolrCloudManager {
       }
     }
     // support only a specific subset of collection admin ops
-    if (!(req instanceof CollectionAdminRequest)) {
+    if (!(req instanceof CollectionAdminRequest) && !req.getPath().startsWith("/admin")) {
       throw new UnsupportedOperationException("Only some CollectionAdminRequest-s are supported: " + req.getClass().getName());
     }
     metricManager.registry("solr.node").counter("ADMIN." + req.getPath() + ".requests").inc();
@@ -897,7 +889,7 @@ public class SimCloudManager implements SolrCloudManager {
     try {
       triggerThread.join();
     } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
+      // ignore
     }
     IOUtils.closeQuietly(objectCache);
     simCloudManagerPool.shutdownNow();

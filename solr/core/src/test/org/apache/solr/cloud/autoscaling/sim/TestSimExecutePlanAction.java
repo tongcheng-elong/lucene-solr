@@ -33,6 +33,7 @@ import org.apache.solr.client.solrj.cloud.autoscaling.VersionedData;
 import org.apache.solr.client.solrj.request.CollectionAdminRequest;
 import org.apache.solr.cloud.CloudTestUtils;
 import org.apache.solr.cloud.CloudTestUtils.AutoScalingRequest;
+import org.apache.solr.cloud.CloudUtils;
 import org.apache.solr.cloud.autoscaling.ActionContext;
 import org.apache.solr.cloud.autoscaling.ExecutePlanAction;
 import org.apache.solr.cloud.autoscaling.NodeLostTrigger;
@@ -90,10 +91,10 @@ public class TestSimExecutePlanAction extends SimSolrCloudTestCase {
     create.setMaxShardsPerNode(1);
     create.process(solrClient);
 
-    log.info("Collection ready after " + CloudTestUtils.waitForState(cluster, collectionName, 120, TimeUnit.SECONDS,
-        CloudTestUtils.clusterShape(1, 2, false, true)) + "ms");
+    log.info("Collection ready after " + CloudUtils.waitForState(cluster, collectionName, 120, TimeUnit.SECONDS,
+        CloudUtils.clusterShape(1, 2, false, true)) + "ms");
 
-    String sourceNodeName = cluster.getSimClusterStateProvider().simGetRandomNode();
+    String sourceNodeName = cluster.getSimClusterStateProvider().simGetRandomNode(random());
     ClusterState clusterState = cluster.getClusterStateProvider().getClusterState();
     DocCollection docCollection = clusterState.getCollection(collectionName);
     List<Replica> replicas = docCollection.getReplicas(sourceNodeName);
@@ -152,8 +153,8 @@ public class TestSimExecutePlanAction extends SimSolrCloudTestCase {
       assertNotNull(response.get("success"));
     }
 
-    log.info("Collection ready after " + CloudTestUtils.waitForState(cluster, collectionName, 300, TimeUnit.SECONDS,
-        CloudTestUtils.clusterShape(1, 2, false, true)) + "ms");
+    log.info("Collection ready after " + CloudUtils.waitForState(cluster, collectionName, 300, TimeUnit.SECONDS,
+        CloudUtils.clusterShape(1, 2, false, true)) + "ms");
   }
 
   @Test
@@ -181,10 +182,10 @@ public class TestSimExecutePlanAction extends SimSolrCloudTestCase {
     create.setMaxShardsPerNode(1);
     create.process(solrClient);
 
-    CloudTestUtils.waitForState(cluster, "Timed out waiting for replicas of new collection to be active",
-        collectionName, CloudTestUtils.clusterShape(1, 2, false, true));
+    CloudUtils.waitForState(cluster, "Timed out waiting for replicas of new collection to be active",
+        collectionName, CloudUtils.clusterShape(1, 2, false, true));
 
-    String sourceNodeName = cluster.getSimClusterStateProvider().simGetRandomNode();
+    String sourceNodeName = cluster.getSimClusterStateProvider().simGetRandomNode(random());
     ClusterState clusterState = cluster.getClusterStateProvider().getClusterState();
     DocCollection docCollection = clusterState.getCollection(collectionName);
     List<Replica> replicas = docCollection.getReplicas(sourceNodeName);
@@ -200,8 +201,8 @@ public class TestSimExecutePlanAction extends SimSolrCloudTestCase {
 
     cluster.getTimeSource().sleep(3000);
 
-    CloudTestUtils.waitForState(cluster, "Timed out waiting for replicas of collection to be 2 again",
-        collectionName, CloudTestUtils.clusterShape(1, 2, false, true));
+    CloudUtils.waitForState(cluster, "Timed out waiting for replicas of collection to be 2 again",
+        collectionName, CloudUtils.clusterShape(1, 2, false, true));
 
     clusterState = cluster.getClusterStateProvider().getClusterState();
     docCollection = clusterState.getCollection(collectionName);
