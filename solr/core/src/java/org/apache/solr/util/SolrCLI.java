@@ -136,7 +136,6 @@ import org.apache.solr.common.util.NamedList;
 import org.apache.solr.common.util.StrUtils;
 import org.apache.solr.common.util.TimeSource;
 import org.apache.solr.common.util.Utils;
-import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.security.Sha256AuthenticationProvider;
 import org.apache.solr.servlet.SolrRequestParsers;
 import org.apache.solr.util.configuration.SSLConfigurationsFactory;
