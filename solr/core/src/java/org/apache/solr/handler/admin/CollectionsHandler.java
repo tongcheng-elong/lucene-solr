@@ -524,6 +524,8 @@ public class CollectionsHandler extends RequestHandlerBase implements Permission
 
     RELOAD_OP(RELOAD, (req, rsp, h) -> copy(req.getParams().required(), null, NAME)),
 
+    REINDEX_COLLECTION_OP(REINDEX_COLLECTION, (req, rsp, h) -> copy(req.getParams().required(), null, NAME)),
+
     SYNCSHARD_OP(SYNCSHARD, (req, rsp, h) -> {
       String collection = req.getParams().required().get("collection");
       String shard = req.getParams().required().get("shard");

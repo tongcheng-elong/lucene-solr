@@ -121,7 +121,8 @@ public interface CollectionParams {
     MOCK_REPLICA_TASK(false, LockLevel.REPLICA),
     NONE(false, LockLevel.NONE),
     // TODO: not implemented yet
-    MERGESHARDS(true, LockLevel.SHARD)
+    MERGESHARDS(true, LockLevel.SHARD),
+    REINDEX_COLLECTION(true, LockLevel.COLLECTION)
     ;
     public final boolean isWrite;
 

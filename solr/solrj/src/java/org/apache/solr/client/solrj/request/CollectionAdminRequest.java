@@ -91,7 +91,7 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
 
   protected final CollectionAction action;
 
-  private static String PROPERTY_PREFIX = "property.";
+  public static String PROPERTY_PREFIX = "property.";
 
   public CollectionAdminRequest(CollectionAction action) {
     this("/admin/collections", action);
@@ -779,6 +779,20 @@ public abstract class CollectionAdminRequest<T extends CollectionAdminResponse> 
       return params;
     }
 
+  }
+
+  /**
+   * Returns a SolrRequest to reindex a collection
+   */
+  public static ReindexCollection reindexCollection(String collection) {
+    return new ReindexCollection(collection);
+  }
+
+  public static class ReindexCollection extends AsyncCollectionSpecificAdminRequest {
+
+    private ReindexCollection(String collection) {
+      super(CollectionAction.REINDEX_COLLECTION, collection);
+    }
   }
 
   /**
