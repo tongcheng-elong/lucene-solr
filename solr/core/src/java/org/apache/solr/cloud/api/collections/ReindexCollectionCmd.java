@@ -26,7 +26,10 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.apache.solr.client.solrj.SolrQuery;
+import org.apache.solr.client.solrj.SolrResponse;
 import org.apache.solr.client.solrj.request.CollectionAdminRequest;
+import org.apache.solr.client.solrj.request.QueryRequest;
 import org.apache.solr.cloud.Overseer;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.cloud.ClusterState;
@@ -38,6 +41,8 @@ import org.apache.solr.common.params.CollectionParams;
 import org.apache.solr.common.params.CommonAdminParams;
 import org.apache.solr.common.params.CommonParams;
 import org.apache.solr.common.params.CoreAdminParams;
+import org.apache.solr.common.params.ModifiableSolrParams;
+import org.apache.solr.common.params.SolrParams;
 import org.apache.solr.common.util.NamedList;
 import org.apache.solr.common.util.Utils;
 import org.apache.solr.util.TimeOut;
@@ -54,6 +59,7 @@ public class ReindexCollectionCmd implements OverseerCollectionMessageHandler.Cm
   public static final String COL_PREFIX = ".reindex_";
   public static final String REINDEX_PROP = CollectionAdminRequest.PROPERTY_PREFIX + "reindex";
   public static final String REINDEX_PHASE_PROP = CollectionAdminRequest.PROPERTY_PREFIX + "reindex_phase";
+  public static final String READONLY_PROP = CollectionAdminRequest.PROPERTY_PREFIX + ZkStateReader.READ_ONLY_PROP;
 
   private final OverseerCollectionMessageHandler ocmh;
 
@@ -171,15 +177,22 @@ public class ReindexCollectionCmd implements OverseerCollectionMessageHandler.Cm
         return;
       }
 
-      // 1. copy existing docs
+      // 1. put the collection in read-only mode
+      cmd = new ZkNodeProps(Overseer.QUEUE_OPERATION, CollectionParams.CollectionAction.MODIFYCOLLECTION.toLower(),
+          ZkStateReader.COLLECTION_PROP, collection,
+          READONLY_PROP, "true");
+      ocmh.overseer.offerStateUpdate(Utils.toJSON(props));
 
+      // 2. copy the documents to tmp
+      ModifiableSolrParams q = new ModifiableSolrParams();
+      q.set(CommonParams.QT, "/stream");
+      q.set("expr", "daemon(id=\"" + tmpCollection + "\")");
+      SolrResponse rsp = ocmh.cloudManager.request(new QueryRequest(q));
 
-      // ?. set up alias - new docs will go to the tmpCollection
-      cmd = new ZkNodeProps(
-          CommonParams.NAME, collection,
-          "collections", tmpCollection
-      );
-      ocmh.commandMap.get(CollectionParams.CollectionAction.CREATEALIAS).call(clusterState, cmd, cmdResults);
+      // 3. delete source collection
+
+      // 4. copy from tmp to source collection
+
       // nocommit error checking
     } finally {
       if (aborted) {
