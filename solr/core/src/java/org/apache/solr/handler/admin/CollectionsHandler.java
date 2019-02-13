@@ -52,6 +52,7 @@ import org.apache.solr.cloud.OverseerTaskQueue.QueueEvent;
 import org.apache.solr.cloud.ZkController.NotInClusterStateException;
 import org.apache.solr.cloud.ZkController;
 import org.apache.solr.cloud.ZkShardTerms;
+import org.apache.solr.cloud.api.collections.ReindexCollectionCmd;
 import org.apache.solr.cloud.overseer.SliceMutator;
 import org.apache.solr.cloud.rule.ReplicaAssigner;
 import org.apache.solr.cloud.rule.Rule;
@@ -524,7 +525,14 @@ public class CollectionsHandler extends RequestHandlerBase implements Permission
 
     RELOAD_OP(RELOAD, (req, rsp, h) -> copy(req.getParams().required(), null, NAME)),
 
-    REINDEX_COLLECTION_OP(REINDEX_COLLECTION, (req, rsp, h) -> copy(req.getParams().required(), null, NAME)),
+    REINDEX_COLLECTION_OP(REINDEX_COLLECTION, (req, rsp, h) -> {
+      Map<String, Object> m = copy(req.getParams().required(), null, NAME);
+      copy(req.getParams(), m,
+          ReindexCollectionCmd.ABORT,
+          ReindexCollectionCmd.KEEP_SOURCE,
+          ReindexCollectionCmd.TARGET);
+      return m;
+    }),
 
     SYNCSHARD_OP(SYNCSHARD, (req, rsp, h) -> {
       String collection = req.getParams().required().get("collection");
