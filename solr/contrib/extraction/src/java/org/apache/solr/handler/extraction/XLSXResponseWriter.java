@@ -30,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
@@ -178,13 +179,18 @@ class XLSXWriter extends TextResponseWriter {
     this.rsp = rsp;
   }
 
+  // TODO: a lot of the code here is copied from CSVResponseWriter. We should look at
+  // refactoring into a common place.
+  // nocommit: Added support for explicitly requested fields (SOLR-7414) similar to how it
+  // was done at CSVResponseWriter. However, this hasn't been tested here.
   public void writeResponse(OutputStream out, LinkedHashMap<String, String> colNamesMap,
                             LinkedHashMap<String, Integer> colWidthsMap) throws IOException {
     SolrParams params = req.getParams();
 
     Collection<String> fields = returnFields.getRequestedFieldNames();
+    Set<String> explicitReqFields = returnFields.getExplicitlyRequestedFieldNames();
     Object responseObj = rsp.getValues().get("response");
-    boolean returnOnlyStored = false;
+    boolean returnStoredOrDocValStored = false;
     if (fields==null||returnFields.hasPatternMatching()) {
       if (responseObj instanceof SolrDocumentList) {
         // get the list of fields from the SolrDocumentList
@@ -203,12 +209,17 @@ class XLSXWriter extends TextResponseWriter {
           Iterables.addAll(fields, all);
         }
       }
+      
+      if (explicitReqFields != null) {
+        // add explicit requested fields
+        Iterables.addAll(fields, explicitReqFields);
+      }
       if (returnFields.wantsScore()) {
         fields.add("score");
       } else {
         fields.remove("score");
       }
-      returnOnlyStored = true;
+      returnStoredOrDocValStored = true;
     }
 
     for (String field : fields) {
@@ -223,14 +234,16 @@ class XLSXWriter extends TextResponseWriter {
       }
 
       SchemaField sf = schema.getFieldOrNull(field);
+      // Return stored fields or useDocValuesAsStored=true fields,
+      // unless an explicit field list is specified
+      if (returnStoredOrDocValStored && !(explicitReqFields != null && explicitReqFields.contains(field)) &&
+          sf!= null && !sf.stored() && !(sf.hasDocValues() && sf.useDocValuesAsStored())) {
+        continue;
+      }
+
       if (sf == null) {
         FieldType ft = new StrField();
         sf = new SchemaField(field, ft);
-      }
-
-      // Return only stored fields, unless an explicit field list is specified
-      if (returnOnlyStored && sf != null && !sf.stored()) {
-        continue;
       }
 
       XLField xlField = new XLField();

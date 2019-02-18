@@ -28,6 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
@@ -246,6 +247,7 @@ class CSVWriter extends TextResponseWriter {
     }
 
     Collection<String> fields = returnFields.getRequestedFieldNames();
+    Set<String> explicitReqFields = returnFields.getExplicitlyRequestedFieldNames();
     Object responseObj = rsp.getResponse();
     boolean returnStoredOrDocValStored = false;
     if (fields==null||returnFields.hasPatternMatching()) {
@@ -266,6 +268,12 @@ class CSVWriter extends TextResponseWriter {
           Iterables.addAll(fields, all);
         }
       }
+
+      if (explicitReqFields != null) {
+        // add explicit requested fields
+        Iterables.addAll(fields, explicitReqFields);
+      }
+
       if (returnFields.wantsScore()) {
         fields.add("score");
       } else {
@@ -288,15 +296,17 @@ class CSVWriter extends TextResponseWriter {
       }
 
       SchemaField sf = schema.getFieldOrNull(field);
+
+      // Return stored fields or useDocValuesAsStored=true fields,
+      // unless an explicit field list is specified
+      if (returnStoredOrDocValStored && !(explicitReqFields != null && explicitReqFields.contains(field)) &&
+          sf!= null && !sf.stored() && !(sf.hasDocValues() && sf.useDocValuesAsStored())) {
+        continue;
+      }
+
       if (sf == null) {
         FieldType ft = new StrField();
         sf = new SchemaField(field, ft);
-      }
-      
-      // Return stored fields or useDocValuesAsStored=true fields,
-      // unless an explicit field list is specified
-      if (returnStoredOrDocValStored && !sf.stored() && !(sf.hasDocValues() && sf.useDocValuesAsStored())) {
-        continue;
       }
 
       // check for per-field overrides
