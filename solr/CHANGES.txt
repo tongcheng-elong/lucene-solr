@@ -115,6 +115,8 @@ Other Changes
 
 * SOLR-7321: Remove reflection in FSHDFSUtils.java (Mike Drob, Kevin Risden)
 
+* SOLR-9840: Add a unit test for LDAP integration (Hrishikesh Gadre, Kevin Risden)
+
 ==================  8.0.0 ==================
 
 Consult the LUCENE_CHANGES.txt file for additional, low level, changes in this release.
