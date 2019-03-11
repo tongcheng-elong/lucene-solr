@@ -194,6 +194,9 @@ Other
   TestSortingMergePolicy now extend it, TestUpgradeIndexMergePolicy added)
   (Christine Poerschke)
 
+* LUCENE-7237: LRUQueryCache now prefers returning an uncached Scorer than
+    waiting on a lock. (Adrien Grand)
+
 ======================= Lucene 5.4.1 =======================
 
 Bug Fixes
