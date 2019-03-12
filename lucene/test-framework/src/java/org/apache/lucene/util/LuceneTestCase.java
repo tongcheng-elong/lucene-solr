@@ -63,17 +63,42 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
+import com.carrotsearch.randomizedtesting.JUnit4MethodProvider;
+import com.carrotsearch.randomizedtesting.LifecycleScope;
+import com.carrotsearch.randomizedtesting.MixWithSuiteName;
+import com.carrotsearch.randomizedtesting.RandomizedContext;
+import com.carrotsearch.randomizedtesting.RandomizedRunner;
+import com.carrotsearch.randomizedtesting.RandomizedTest;
+import com.carrotsearch.randomizedtesting.annotations.Listeners;
+import com.carrotsearch.randomizedtesting.annotations.SeedDecorators;
+import com.carrotsearch.randomizedtesting.annotations.TestGroup;
+import com.carrotsearch.randomizedtesting.annotations.TestMethodProviders;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakAction;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakAction.Action;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakFilters;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakGroup;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakGroup.Group;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakLingering;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope.Scope;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakZombies;
+import com.carrotsearch.randomizedtesting.annotations.ThreadLeakZombies.Consequence;
+import com.carrotsearch.randomizedtesting.annotations.TimeoutSuite;
+import com.carrotsearch.randomizedtesting.generators.RandomPicks;
+import com.carrotsearch.randomizedtesting.rules.NoClassHooksShadowingRule;
+import com.carrotsearch.randomizedtesting.rules.NoInstanceHooksOverridesRule;
+import com.carrotsearch.randomizedtesting.rules.StaticFieldsInvariantRule;
+import junit.framework.AssertionFailedError;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.MockAnalyzer;
 import org.apache.lucene.document.Document;
-import org.apache.lucene.document.Field.Store;
 import org.apache.lucene.document.Field;
+import org.apache.lucene.document.Field.Store;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.document.StringField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.*;
 import org.apache.lucene.index.IndexReader.ReaderClosedListener;
-import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.TermsEnum.SeekStatus;
 import org.apache.lucene.search.AssertingIndexSearcher;
 import org.apache.lucene.search.DocIdSetIterator;
@@ -91,8 +116,8 @@ import org.apache.lucene.store.FlushInfo;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.LockFactory;
 import org.apache.lucene.store.MergeInfo;
-import org.apache.lucene.store.MockDirectoryWrapper.Throttling;
 import org.apache.lucene.store.MockDirectoryWrapper;
+import org.apache.lucene.store.MockDirectoryWrapper.Throttling;
 import org.apache.lucene.store.NRTCachingDirectory;
 import org.apache.lucene.store.RawDirectoryWrapper;
 import org.apache.lucene.util.automaton.AutomatonTestUtil;
@@ -109,32 +134,6 @@ import org.junit.Test;
 import org.junit.rules.RuleChain;
 import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
-
-import com.carrotsearch.randomizedtesting.JUnit4MethodProvider;
-import com.carrotsearch.randomizedtesting.LifecycleScope;
-import com.carrotsearch.randomizedtesting.MixWithSuiteName;
-import com.carrotsearch.randomizedtesting.RandomizedContext;
-import com.carrotsearch.randomizedtesting.RandomizedRunner;
-import com.carrotsearch.randomizedtesting.RandomizedTest;
-import com.carrotsearch.randomizedtesting.annotations.Listeners;
-import com.carrotsearch.randomizedtesting.annotations.SeedDecorators;
-import com.carrotsearch.randomizedtesting.annotations.TestGroup;
-import com.carrotsearch.randomizedtesting.annotations.TestMethodProviders;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakAction.Action;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakAction;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakFilters;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakGroup.Group;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakGroup;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakLingering;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope.Scope;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakScope;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakZombies.Consequence;
-import com.carrotsearch.randomizedtesting.annotations.ThreadLeakZombies;
-import com.carrotsearch.randomizedtesting.annotations.TimeoutSuite;
-import com.carrotsearch.randomizedtesting.generators.RandomPicks;
-import com.carrotsearch.randomizedtesting.rules.NoClassHooksShadowingRule;
-import com.carrotsearch.randomizedtesting.rules.NoInstanceHooksOverridesRule;
-import com.carrotsearch.randomizedtesting.rules.StaticFieldsInvariantRule;
 
 import static com.carrotsearch.randomizedtesting.RandomizedTest.systemPropertyAsBoolean;
 import static com.carrotsearch.randomizedtesting.RandomizedTest.systemPropertyAsInt;
@@ -2532,6 +2531,29 @@ public abstract class LuceneTestCase extends Assert {
     }
     
     assertEquals(info, left, right);
+  }
+
+
+
+  /** A runnable that can throw any checked exception. */
+  @FunctionalInterface
+  public interface ThrowingRunnable {
+    void run() throws Throwable;
+  }
+
+  /** Checks a specific exception class is thrown by the given runnable, and returns it. */
+  public static <T extends Throwable> T expectThrows(Class<T> expectedType, ThrowingRunnable runnable) {
+    try {
+      runnable.run();
+    } catch (Throwable e) {
+      if (expectedType.isInstance(e)) {
+        return expectedType.cast(e);
+      }
+      AssertionFailedError assertion = new AssertionFailedError("Unexpected exception type, expected " + expectedType.getSimpleName());
+      assertion.initCause(e);
+      throw assertion;
+    }
+    throw new AssertionFailedError("Expected exception " + expectedType.getSimpleName());
   }
 
   /** Returns true if the file exists (can be opened), false

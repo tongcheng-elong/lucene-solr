@@ -665,6 +665,13 @@ public class LRUQueryCache implements QueryCache, Accountable {
       if (used.compareAndSet(false, true)) {
         policy.onUse(getQuery());
       }
+
+      // Short-circuit: Check whether this segment is eligible for caching
+      // before we take a lock because of #get
+      if (shouldCache(context) == false) {
+        return in.scorer(context);
+      }
+
       // If the lock is already busy, prefer using the uncached version than waiting
       if (lock.tryLock() == false) {
         return in.scorer(context);
@@ -675,6 +682,7 @@ public class LRUQueryCache implements QueryCache, Accountable {
       } finally {
         lock.unlock();
       }
+
       if (docIdSet == null) {
         if (shouldCache(context)) {
           docIdSet = cache(context);
@@ -700,6 +708,11 @@ public class LRUQueryCache implements QueryCache, Accountable {
     public BulkScorer bulkScorer(LeafReaderContext context) throws IOException {
       if (used.compareAndSet(false, true)) {
         policy.onUse(getQuery());
+      }
+      // Short-circuit: Check whether this segment is eligible for caching
+      // before we take a lock because of #get
+      if (shouldCache(context) == false) {
+        return in.bulkScorer(context);
       }
 
       // If the lock is already busy, prefer using the uncached version than waiting

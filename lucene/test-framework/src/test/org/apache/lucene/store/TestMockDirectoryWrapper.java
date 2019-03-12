@@ -19,13 +19,6 @@ package org.apache.lucene.store;
 import java.io.IOException;
 import java.nio.file.Path;
 
-import org.apache.lucene.document.Document;
-import org.apache.lucene.index.IndexWriter;
-import org.apache.lucene.index.IndexWriterConfig;
-import org.apache.lucene.index.RandomIndexWriter;
-import org.apache.lucene.util.IOUtils;
-import org.apache.lucene.util.LuceneTestCase.Nightly;
-
 public class TestMockDirectoryWrapper extends BaseDirectoryTestCase {
   
   @Override
@@ -84,16 +77,56 @@ public class TestMockDirectoryWrapper extends BaseDirectoryTestCase {
     out.close();
     dir.close();
   }
-  
-  public void testMDWinsideOfMDW() throws Exception {
-    // add MDW inside another MDW
-    Directory dir = new MockDirectoryWrapper(random(), newMockDirectory());
-    RandomIndexWriter iw = new RandomIndexWriter(random(), dir);
-    for (int i = 0; i < 20; i++) {
-      iw.addDocument(new Document());
-    }
-    iw.commit();
-    iw.close();
+
+  public void testAbuseClosedIndexInput() throws Exception {
+    MockDirectoryWrapper dir = newMockDirectory();
+    IndexOutput out = dir.createOutput("foo", IOContext.DEFAULT);
+    out.writeByte((byte) 42);
+    out.close();
+    final IndexInput in = dir.openInput("foo", IOContext.DEFAULT);
+    in.close();
+    expectThrows(RuntimeException.class, new ThrowingRunnable() {
+      @Override
+      public void run() throws Throwable {
+        in.readByte();
+      }
+    });
     dir.close();
-  }  
+  }
+
+  public void testAbuseCloneAfterParentClosed() throws Exception {
+    MockDirectoryWrapper dir = newMockDirectory();
+    IndexOutput out = dir.createOutput("foo", IOContext.DEFAULT);
+    out.writeByte((byte) 42);
+    out.close();
+    IndexInput in = dir.openInput("foo", IOContext.DEFAULT);
+    final IndexInput clone = in.clone();
+    in.close();
+    expectThrows(RuntimeException.class, new ThrowingRunnable() {
+      @Override
+      public void run() throws Throwable {
+        clone.readByte();
+      }
+    });
+
+    dir.close();
+  }
+
+  public void testAbuseCloneOfCloneAfterParentClosed() throws Exception {
+    MockDirectoryWrapper dir = newMockDirectory();
+    IndexOutput out = dir.createOutput("foo", IOContext.DEFAULT);
+    out.writeByte((byte) 42);
+    out.close();
+    IndexInput in = dir.openInput("foo", IOContext.DEFAULT);
+    IndexInput clone1 = in.clone();
+    final IndexInput clone2 = clone1.clone();
+    in.close();
+    expectThrows(RuntimeException.class, new ThrowingRunnable() {
+      @Override
+      public void run() throws Throwable {
+        clone2.readByte();
+      }
+    });
+    dir.close();
+  }
 }

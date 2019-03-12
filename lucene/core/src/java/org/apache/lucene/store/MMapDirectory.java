@@ -18,6 +18,8 @@ package org.apache.lucene.store;
 
  
 import java.io.IOException;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.ClosedChannelException; // javadoc @link
@@ -27,16 +29,21 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
-import java.security.PrivilegedExceptionAction;
-import java.security.PrivilegedActionException;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.Future;
 import java.lang.reflect.Method;
 
-import org.apache.lucene.store.ByteBufferIndexInput.BufferCleaner;
+import org.apache.lucene.store.ByteBufferGuard.BufferCleaner;
 import org.apache.lucene.util.Constants;
 import org.apache.lucene.util.SuppressForbidden;
+
+import static java.lang.invoke.MethodHandles.constant;
+import static java.lang.invoke.MethodHandles.dropArguments;
+import static java.lang.invoke.MethodHandles.filterReturnValue;
+import static java.lang.invoke.MethodHandles.guardWithTest;
+import static java.lang.invoke.MethodHandles.lookup;
+import static java.lang.invoke.MethodType.methodType;
 
 /** File-based {@link Directory} implementation that uses
  *  mmap for reading, and {@link
@@ -160,30 +167,7 @@ public class MMapDirectory extends FSDirectory {
     this.chunkSizePower = 31 - Integer.numberOfLeadingZeros(maxChunkSize);
     assert this.chunkSizePower >= 0 && this.chunkSizePower <= 30;
   }
-  
-  /**
-   * <code>true</code>, if this platform supports unmapping mmapped files.
-   */
-  public static final boolean UNMAP_SUPPORTED = AccessController.doPrivileged(new PrivilegedAction<Boolean>() {
-    @Override
-    @SuppressForbidden(reason = "Needs access to private APIs in DirectBuffer and sun.misc.Cleaner to enable hack")
-    public Boolean run() {
-      try {
-        // inspect DirectByteBuffer:
-        final Class<?> dbClazz = Class.forName("java.nio.DirectByteBuffer");
-        final Method cleanerMethod = dbClazz.getMethod("cleaner");
-        cleanerMethod.setAccessible(true);
-        // try to lookup the clean method from sun.misc.Cleaner:
-        final Class<?> cleanerClazz = Class.forName("sun.misc.Cleaner");
-        cleanerClazz.getMethod("clean"); // no setAccessible needed as everything is public!
-        // check return type fits cleaner class return our decision:
-        return Objects.equals(cleanerMethod.getReturnType(), cleanerClazz);
-      } catch (Exception e) {
-        return false;
-      }
-    }
-  });
-  
+
   /**
    * This method enables the workaround for unmapping the buffers
    * from address space after closing {@link IndexInput}, that is
@@ -197,8 +181,9 @@ public class MMapDirectory extends FSDirectory {
    * is <code>false</code> and the workaround cannot be enabled.
    */
   public void setUseUnmap(final boolean useUnmapHack) {
-    if (useUnmapHack && !UNMAP_SUPPORTED)
-      throw new IllegalArgumentException("Unmap hack not supported on this platform!");
+    if (useUnmapHack && !UNMAP_SUPPORTED) {
+      throw new IllegalArgumentException(UNMAP_NOT_SUPPORTED_REASON);
+    }
     this.useUnmapHack=useUnmapHack;
   }
   
@@ -245,8 +230,8 @@ public class MMapDirectory extends FSDirectory {
       final String resourceDescription = "MMapIndexInput(path=\"" + path.toString() + "\")";
       final boolean useUnmap = getUseUnmap();
       return ByteBufferIndexInput.newInstance(resourceDescription,
-          map(resourceDescription, c, 0, c.size()), 
-          c.size(), chunkSizePower, useUnmap ? CLEANER : null, useUnmap);
+          map(resourceDescription, c, 0, c.size()),
+          c.size(), chunkSizePower, new ByteBufferGuard(resourceDescription, useUnmap ? CLEANER : null));
     }
   }
 
@@ -314,29 +299,101 @@ public class MMapDirectory extends FSDirectory {
     newIoe.setStackTrace(ioe.getStackTrace());
     return newIoe;
   }
-  
-  private static final BufferCleaner CLEANER = new BufferCleaner() {
-    @Override
-    public void freeBuffer(final ByteBufferIndexInput parent, final ByteBuffer buffer) throws IOException {
-      try {
-        AccessController.doPrivileged(new PrivilegedExceptionAction<Void>() {
-          @Override
-          @SuppressForbidden(reason = "Needs access to private APIs in DirectBuffer and sun.misc.Cleaner to enable hack")
-          public Void run() throws Exception {
-            final Method getCleanerMethod = buffer.getClass()
-              .getMethod("cleaner");
-            getCleanerMethod.setAccessible(true);
-            final Object cleaner = getCleanerMethod.invoke(buffer);
-            if (cleaner != null) {
-              cleaner.getClass().getMethod("clean")
-                .invoke(cleaner);
-            }
-            return null;
-          }
-        });
-      } catch (PrivilegedActionException e) {
-        throw new IOException("Unable to unmap the mapped buffer: " + parent.toString(), e.getCause());
+
+  /**
+   * <code>true</code>, if this platform supports unmapping mmapped files.
+   */
+  public static final boolean UNMAP_SUPPORTED;
+
+  /**
+   * if {@link #UNMAP_SUPPORTED} is {@code false}, this contains the reason why unmapping is not supported.
+   */
+  public static final String UNMAP_NOT_SUPPORTED_REASON;
+
+  /** Reference to a BufferCleaner that does unmapping; {@code null} if not supported. */
+  private static final BufferCleaner CLEANER;
+
+  static {
+    final Object hack = AccessController.doPrivileged(new PrivilegedAction<Object>() {
+      @Override
+      public Object run() {
+        return unmapHackImpl();
       }
+    });
+    if (hack instanceof BufferCleaner) {
+      CLEANER = (BufferCleaner) hack;
+      UNMAP_SUPPORTED = true;
+      UNMAP_NOT_SUPPORTED_REASON = null;
+    } else {
+      CLEANER = null;
+      UNMAP_SUPPORTED = false;
+      UNMAP_NOT_SUPPORTED_REASON = hack.toString();
     }
-  };
+  }
+
+  @SuppressForbidden(reason = "Needs access to private APIs in DirectBuffer and sun.misc.Cleaner to enable hack")
+  private static Object unmapHackImpl() {
+    final MethodHandles.Lookup lookup = lookup();
+    try {
+      final Class<?> directBufferClass = Class.forName("java.nio.DirectByteBuffer");
+
+      final Method m = directBufferClass.getMethod("cleaner");
+      m.setAccessible(true);
+      MethodHandle directBufferCleanerMethod = lookup.unreflect(m);
+      Class<?> cleanerClass = directBufferCleanerMethod.type().returnType();
+
+      final MethodHandle cleanMethod;
+      if (Runnable.class.isAssignableFrom(cleanerClass)) {
+        // early Java 9 impl using Runnable (we do the security check early that the Runnable does at runtime):
+        final SecurityManager sm = System.getSecurityManager();
+        if (sm != null) {
+          sm.checkPackageAccess("jdk.internal.ref");
+        }
+        // cast return value of cleaner() to Runnable:
+        directBufferCleanerMethod = directBufferCleanerMethod.asType(directBufferCleanerMethod.type().changeReturnType(Runnable.class));
+        cleanerClass = Runnable.class;
+        // lookup run() method on the interface instead of Cleaner:
+        cleanMethod = lookup.findVirtual(cleanerClass, "run", methodType(void.class));
+      } else {
+        // can be either the old internal "sun.misc.Cleaner" or
+        // the new Java 9 "java.lang.ref.Cleaner$Cleanable":
+        cleanMethod = lookup.findVirtual(cleanerClass, "clean", methodType(void.class));
+      }
+
+      final MethodHandle nonNullTest = lookup.findStatic(Objects.class, "nonNull", methodType(boolean.class, Object.class))
+          .asType(methodType(boolean.class, cleanerClass));
+      final MethodHandle noop = dropArguments(constant(Void.class, null).asType(methodType(void.class)), 0, cleanerClass);
+      final MethodHandle unmapper = filterReturnValue(directBufferCleanerMethod, guardWithTest(nonNullTest, cleanMethod, noop))
+          .asType(methodType(void.class, ByteBuffer.class));
+
+      return new BufferCleaner() {
+        @Override
+        public void freeBuffer(String resourceDescription, final ByteBuffer buffer) throws IOException {
+          if (directBufferClass.isInstance(buffer)) {
+            final Throwable error = AccessController.doPrivileged(new PrivilegedAction<Throwable>() {
+              @Override
+              public Throwable run() {
+                try {
+                  unmapper.invokeExact(buffer);
+                  return null;
+                } catch (Throwable t) {
+                  return t;
+                }
+              }
+            });
+            if (error != null) {
+              throw new IOException("Unable to unmap the mapped buffer: " + resourceDescription, error);
+            }
+          }
+        }
+      };
+    } catch (ReflectiveOperationException e) {
+      return "Unmapping is not supported on this platform, because internal Java APIs are not compatible to this Lucene version: " + e;
+    } catch (SecurityException e) {
+      return "Unmapping is not supported, because not all required permissions are given to the Lucene JAR file: " + e +
+          " [Please grant at least the following permissions: RuntimePermission(\"accessClassInPackage.sun.misc\"), " +
+          "RuntimePermission(\"accessClassInPackage.jdk.internal.ref\"), and " +
+          "ReflectPermission(\"suppressAccessChecks\")]";
+    }
+  }
 }

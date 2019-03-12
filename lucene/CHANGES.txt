@@ -197,6 +197,17 @@ Other
 * LUCENE-7237: LRUQueryCache now prefers returning an uncached Scorer than
     waiting on a lock. (Adrien Grand)
 
+* LUCENE-7651: Fix Javadocs build for Java 8u121 by injecting "Google Code
+  Prettify" without adding Javascript to Javadocs's -bottom parameter.
+  Also update Prettify to latest version to fix Google Chrome issue.
+  (Uwe Schindler)
+
+* LUCENE-7409: Changed MMapDirectory's unmapping to work safer, but still with
+  no guarantees. This uses a store-store barrier and yields the current thread
+  before unmapping to allow in-flight requests to finish. The new code no longer
+  uses WeakIdentityMap as it delegates all ByteBuffer reads throgh a new
+  ByteBufferGuard wrapper that is shared between all ByteBufferIndexInput clones.
+  (Robert Muir, Uwe Schindler)
 ======================= Lucene 5.4.1 =======================
 
 Bug Fixes
